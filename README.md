@@ -1,2 +1,2 @@
 # jet-warfare
-Look at the README
+Jet game
