@@ -1,1 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Jet Warfare</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#05050a; --bg2:#0b0c16; --panel:#12131f; --panel2:#1a1c2c;
+    --accent:#5eead4; --accent2:#a78bfa; --gold:#fbbf24; --danger:#f87171;
+    --text:#e7e9f3; --muted:#9296b3; --border:#2a2c42;
+    --px-head: 'Press Start 2P', monospace;
+    --px-body: 'VT323', monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:radial-gradient(ellipse at 50% -10%, #1a1c33 0%, var(--bg) 60%);
+    color:var(--text); font-family:var(--px-body); font-size:19px;
+    display:flex; align-items:center; justify-content:center; min-height:100%;
+    overflow-x:hidden; image-rendering:pixelated;
+  }
+  #app{
+    width:100%; max-width:460px; height:100vh; max-height:900px;
+    background:linear-gradient(180deg, var(--bg2), #08080f);
+    border:3px solid #000; outline:2px solid var(--border);
+    overflow:hidden; position:relative; box-shadow:0 0 0 4px #000, 0 0 40px rgba(94,234,212,0.15);
+    display:flex; flex-direction:column; image-rendering:pixelated;
+  }
+  #app.device-phone{ max-width:460px; max-height:900px; zoom:1; }
+  #app.device-tablet{ max-width:700px; max-height:1000px; zoom:1.18; }
+  #app.device-pc{ max-width:900px; max-height:1000px; zoom:1.32; }
+  .screen{ display:none; flex-direction:column; height:100%; width:100%; opacity:1; }
+  .screen.active{ display:flex; }
+  .screen.fade-transition{ transition:opacity .6s ease; }
 
+  /* click-to-begin gate */
+  #screen-clickstart{ position:relative; align-items:center; justify-content:center; cursor:pointer; overflow:hidden; }
+  #clickstart-canvas{ position:absolute; inset:0; width:100%; height:100%; image-rendering:pixelated; }
+  #clickstart-text{
+    position:relative; z-index:2; font-family:var(--px-head); font-size:15px; color:var(--accent);
+    text-shadow:2px 2px 0 #000; letter-spacing:2px; text-transform:uppercase; text-align:center;
+    padding:0 24px; animation:clickPulse 2.6s ease-in-out infinite;
+  }
+  @keyframes clickPulse{ 0%,100%{ opacity:0.2; } 50%{ opacity:1; } }
+  .scroll{ overflow-y:auto; flex:1; }
+  .pad{ padding:16px; }
+  h1,h2,h3{ margin:0 0 8px 0; font-family:var(--px-head); line-height:1.5; }
+  h1{ font-size:20px; color:var(--accent); text-shadow:2px 2px 0 #000; }
+  h2{ font-size:13px; color:var(--text); letter-spacing:1px; }
+  h3{ font-size:12px; color:var(--accent2); }
+  p{ color:var(--muted); line-height:1.5; font-size:17px; margin:6px 0; }
+  .brand{ text-align:center; margin-bottom:18px; }
+  .brand .sub{ color:var(--muted); font-family:var(--px-head); font-size:9px; letter-spacing:3px; text-transform:uppercase; margin-top:8px; }
+  label{ font-family:var(--px-head); font-size:9px; color:var(--muted); display:block; margin:12px 0 6px; letter-spacing:1px; }
+  input[type=text],input[type=password]{
+    width:100%; padding:12px 12px; border:3px solid var(--border);
+    background:var(--panel); color:var(--text); font-family:var(--px-body); font-size:18px; outline:none;
+  }
+  input:focus{ border-color:var(--accent); }
+  button{
+    cursor:pointer; font-family:var(--px-head); text-transform:uppercase; letter-spacing:1px;
+    border:3px solid #000; padding:14px 16px; font-size:14px;
+    background:var(--panel2); color:var(--text);
+    box-shadow:5px 5px 0 #000; transition:transform .05s, box-shadow .05s;
+  }
+  button:active{ transform:translate(2px,2px); box-shadow:2px 2px 0 #000; }
+  button.primary{ background:linear-gradient(180deg,#6ff0da,var(--accent)); color:#04241f; border-color:#04241f; }
+  button.secondary{ background:var(--panel2); border-color:#000; color:var(--text); }
+  button.danger{ background:linear-gradient(180deg,#f87171,#b91c1c); color:#fff; }
+  button:disabled{ opacity:0.4; cursor:not-allowed; box-shadow:2px 2px 0 #000; }
+  button.block{ width:100%; margin-top:10px; }
+  .err{ color:var(--danger); font-family:var(--px-body); font-size:15px; min-height:16px; margin-top:8px; }
+  .link-row{ text-align:center; margin-top:16px; font-size:16px; color:var(--muted); }
+  .link-row a{ color:var(--accent); cursor:pointer; text-decoration:underline; }
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between; padding:10px 12px;
+    border-bottom:3px solid var(--border); background:var(--panel); gap:8px;
+  }
+  .topbar h2{ margin:0; }
+  .curbox{ display:flex; gap:6px; font-family:var(--px-body); font-size:16px; }
+  .curbox span{ background:var(--panel2); padding:4px 8px; border:2px solid var(--border); }
+  .gear-btn{ width:42px; height:42px; padding:0; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0; }
+  .backbtn{ background:none; border:none; box-shadow:none; color:var(--accent); font-family:var(--px-head); font-size:12px; padding:4px 0; text-align:left; }
+  .backbtn:active{ transform:none; }
+
+  /* MENU */
+  #menu-scroll{ display:flex; flex-direction:column; align-items:center; padding:14px 20px 20px; }
+  .menu-emblem{ font-size:44px; margin:6px 0 2px; text-align:center; }
+  .menu-equip-label{ font-family:var(--px-body); font-size:16px; color:var(--muted); text-align:center; margin-bottom:14px; }
+  .menu-equip-label b{ color:var(--accent); }
+  #play-btn{ font-size:22px; padding:22px 40px; width:100%; max-width:280px; box-shadow:7px 7px 0 #000; margin-bottom:22px; }
+  #play-btn:active{ box-shadow:3px 3px 0 #000; }
+  .menu-list{ width:100%; max-width:320px; display:flex; flex-direction:column; gap:12px; }
+  .menu-list button{ font-size:13px; padding:16px; width:100%; }
+
+  /* levels grid */
+  .levels-grid{ display:grid; grid-template-columns:repeat(5,1fr); gap:7px; padding:14px; }
+  .lvl-btn{ aspect-ratio:1; background:var(--panel2); border:3px solid #000; box-shadow:3px 3px 0 #000; display:flex; flex-direction:column; align-items:center; justify-content:center; font-family:var(--px-head); font-size:14px; padding:2px; }
+  .lvl-btn.locked{ opacity:0.3; box-shadow:none; }
+  .lvl-btn.done{ border-color:var(--accent); }
+  .lvl-btn .stars{ font-size:9px; color:var(--gold); margin-top:4px; }
+
+  /* settings */
+  .settings-block{ background:var(--panel2); border:3px solid #000; box-shadow:4px 4px 0 #000; padding:14px; margin:0 14px 16px 14px; }
+
+  /* GAME */
+  #gameWrap{ position:relative; flex:1; display:flex; align-items:center; justify-content:center; background:#000; }
+  #gameCanvas{ background:#04040a; touch-action:none; max-width:100%; max-height:100%; image-rendering:pixelated; }
+  #hud{ position:absolute; top:0; left:0; right:0; padding:10px 12px; display:flex; flex-direction:column; gap:6px; pointer-events:none; font-family:var(--px-body); }
+  .hud-row{ display:flex; justify-content:space-between; align-items:center; font-size:16px; }
+  .hud-row.jet-row{ margin-top:28px; justify-content:flex-end; }
+  .hpbar-outer{ flex:1; height:14px; background:#1a1a2a; border:2px solid #000; overflow:hidden; margin-right:8px; }
+  .hpbar-inner{ height:100%; background:linear-gradient(90deg,#f87171,#fbbf24,#5eead4); width:100%; transition:width .15s; }
+  .hud-pill{ background:rgba(18,19,31,0.9); padding:4px 9px; border:2px solid var(--border); white-space:nowrap; }
+  #pauseBtn{ position:absolute; top:48px; right:10px; pointer-events:all; padding:6px 9px; font-size:12px; }
+  .overlay{
+    position:absolute; inset:0; background:rgba(3,3,8,0.94); display:none;
+    flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:24px; z-index:5;
+  }
+  .overlay.show{ display:flex; }
+  .overlay .btnrow{ display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; justify-content:center; }
+  .skillbar{ position:absolute; bottom:10px; left:10px; font-family:var(--px-body); font-size:14px; color:var(--muted); pointer-events:none; background:rgba(10,10,18,0.7); padding:4px 8px; border:1px solid var(--border); }
+  .instructions-list li{ margin:10px 0; color:var(--text); font-size:17px; }
+  .toast{ position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--panel2); border:3px solid #000; box-shadow:3px 3px 0 #000; padding:10px 16px; font-family:var(--px-body); font-size:16px; z-index:50; opacity:0; transition:opacity .3s; }
+  .toast.show{ opacity:1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="screen active" id="screen-login">
+    <div class="scroll pad">
+      <div class="brand" style="margin-top:30px;">
+        <h1>&#9992; JET WARFARE</h1>
+        <div class="sub">space combat</div>
+      </div>
+      <label>Username</label>
+      <input type="text" id="login-username" autocomplete="username" placeholder="Enter username">
+      <label>Password</label>
+      <input type="password" id="login-password" autocomplete="current-password" placeholder="Enter password">
+      <div class="err" id="login-err"></div>
+      <button class="primary block" id="login-btn">Log In</button>
+      <div class="link-row">No account? <a id="go-signup">Sign up</a></div>
+    </div>
+  </div>
+
+  <div class="screen" id="screen-signup">
+    <div class="scroll pad">
+      <div class="brand" style="margin-top:30px;">
+        <h1>&#9992; JET WARFARE</h1>
+        <div class="sub">create account</div>
+      </div>
+      <label>Username</label>
+      <input type="text" id="signup-username" placeholder="Choose a username">
+      <label>Password</label>
+      <input type="password" id="signup-password" placeholder="Choose a password">
+      <label>Confirm Password</label>
+      <input type="password" id="signup-password2" placeholder="Re-enter password">
+      <div class="err" id="signup-err"></div>
+      <button class="primary block" id="signup-btn">Create Account</button>
+      <div class="link-row">Have an account? <a id="go-login">Log in</a></div>
+    </div>
+  </div>
+
+  <div class="screen" id="screen-clickstart">
+    <canvas id="clickstart-canvas"></canvas>
+    <div id="clickstart-text">Click Anywhere to Begin</div>
+  </div>
+
+  <div class="screen" id="screen-instructions">
+    <div class="topbar"><h2>How To Play</h2><div style="width:34px;"></div></div>
+    <div class="scroll pad">
+      <ul class="instructions-list">
+        <li><b>Drag</b> your jet left/right along the bottom with your mouse or finger. If a <b>keyboard</b> is connected, use the <b>Left/Right arrow keys or A/D</b> to move instead.</li>
+        <li>Your jet <b>fires automatically</b> — barrels, burst count and fire speed depend on your jet.</li>
+        <li>Every level has <b>5 waves</b> plus a <b>boss</b> that holds position at the top.</li>
+        <li>If an enemy <b>touches your jet</b> you die instantly. If one <b>reaches the bottom</b> without being destroyed, you instantly lose.</li>
+        <li>Enemies shoot back — losing all your <b>health</b> ends the run. A shot that flies past you without hitting simply fizzles out.</li>
+      </ul>
+      <button class="primary block" id="instructions-continue">Let's Fly</button>
+    </div>
+  </div>
+
+  <div class="screen" id="screen-menu">
+    <div class="topbar">
+      <h2 id="menu-username">Pilot</h2>
+      <div class="curbox">
+        <span>C <span id="menu-coins">0</span></span>
+        <span>G <span id="menu-gems">0</span></span>
+      </div>
+      <button class="gear-btn secondary" id="gear-btn" title="Settings">&#9881;</button>
+    </div>
+    <div class="scroll">
+      <div id="menu-scroll">
+        <div class="menu-emblem">&#9992;</div>
+        <div class="menu-equip-label">Equipped: <b id="menu-equipped">Falcon I</b></div>
+        <button class="primary" id="play-btn">&#9654; PLAY</button>
+        <div class="menu-list">
+          <button class="secondary" id="nav-levels">Levels</button>
+          <button class="secondary" id="nav-jets">Jets</button>
+          <button class="secondary" id="nav-stats">Stats</button>
+          <button class="secondary" id="nav-instructions">Instructions</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen" id="screen-levels">
+    <div class="topbar">
+      <button class="backbtn" data-back="screen-menu">&lsaquo; Menu</button>
+      <h2>Levels</h2><div style="width:34px;"></div>
+    </div>
+    <div class="scroll">
+      <div class="levels-grid" id="levels-grid"></div>
+    </div>
+  </div>
+
+  <div class="screen" id="screen-stats">
+    <div class="topbar">
+      <button class="backbtn" data-back="screen-menu">&lsaquo; Menu</button>
+      <h2>Stats</h2><div style="width:34px;"></div>
+    </div>
+    <div class="scroll pad" id="stats-list"></div>
+  </div>
+
+  <div class="screen" id="screen-jets">
+    <div class="topbar">
+      <button class="backbtn" data-back="screen-menu">&lsaquo; Menu</button>
+      <h2>Jets</h2>
+      <div class="curbox"><span>C <span id="jets-coins">0</span></span><span>G <span id="jets-gems">0</span></span></div>
+    </div>
+    <div class="scroll" style="padding-top:12px;" id="jets-list"></div>
+  </div>
+
+  <div class="screen" id="screen-settings">
+    <div class="topbar">
+      <button class="backbtn" data-back="screen-menu">&lsaquo; Menu</button>
+      <h2>Settings</h2><div style="width:34px;"></div>
+    </div>
+    <div class="scroll pad">
+      <div class="settings-block">
+        <h3>Account</h3>
+        <p>Logged in as <b id="settings-username" style="color:var(--text);"></b></p>
+        <button class="secondary block" id="settings-logout-btn">Log Out</button>
+      </div>
+      <div class="settings-block">
+        <h3>Reset Progress</h3>
+        <p>This wipes your currency, jets, and level progress back to the start. Your login stays the same. Type your username below to confirm.</p>
+        <input type="text" id="reset-confirm-input" placeholder="Type your username">
+        <div class="err" id="reset-err"></div>
+        <button class="danger block" id="reset-btn">Reset Account</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen" id="screen-game">
+    <div id="gameWrap">
+      <canvas id="gameCanvas" width="420" height="700"></canvas>
+      <div id="hud">
+        <div class="hud-row">
+          <div class="hpbar-outer"><div class="hpbar-inner" id="hp-inner"></div></div>
+          <div class="hud-pill" id="hp-text">100/100</div>
+        </div>
+        <div class="hud-row">
+          <div class="hud-pill" id="level-text">Level 1 - Wave 1/5</div>
+        </div>
+        <div class="hud-row jet-row">
+          <div class="hud-pill" id="jet-text">Falcon I</div>
+        </div>
+      </div>
+      <button id="pauseBtn">||</button>
+      <div class="skillbar" id="skill-text"></div>
+      <button id="skillActivateBtn">SKILL<span class="cd" id="skillCdText">RDY</span></button>
+
+      <div class="overlay" id="overlay-pause">
+        <h1>Paused</h1>
+        <div class="btnrow">
+          <button class="primary" id="resume-btn">Resume</button>
+          <button class="secondary" id="quit-btn">Quit to Menu</button>
+        </div>
+      </div>
+      <div class="overlay" id="overlay-win">
+        <h1 style="color:var(--accent);">Level Complete!</h1>
+        <p id="win-summary"></p>
+        <div class="btnrow">
+          <button class="primary" id="win-next">Next Level</button>
+          <button class="secondary" id="win-levels">Levels</button>
+          <button class="secondary" id="win-menu">Menu</button>
+        </div>
+      </div>
+      <div class="overlay" id="overlay-lose">
+        <h1 style="color:var(--danger);">You Were Shot Down</h1>
+        <p id="lose-summary"></p>
+        <div class="btnrow">
+          <button class="primary" id="lose-retry">Retry</button>
+          <button class="secondary" id="lose-levels">Levels</button>
+          <button class="secondary" id="lose-menu">Menu</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+
+/*
+  Supabase configuration is kept in one place so this file continues working as a standalone index.html.
+  Replace the placeholders with your actual values from the Supabase project dashboard.
+*/
+const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
+const SUPABASE_ANON_KEY = 'YOUR-ANON-PUBLIC-KEY';
+const SB_CONFIGURED = !SUPABASE_URL.includes('YOUR-PROJECT-REF') && !SUPABASE_ANON_KEY.includes('YOUR-ANON');
+const SB_EMAIL_DOMAIN = '@jetwarfare.local';
+
+// TODO(future): set up the Supabase DB schema and RLS policy exactly as described in the setup notes below.
+// TODO(future): finish the remaining gameplay save hooks for every jet, level, and skill state across all screens.
+// TODO(future): add a conflict-resolution strategy for last-write-wins when two devices save at the same time.
+// TODO(future): wire admin override tracking into the full game logic if you need the admin panel to persist across devices.
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._h);
+  toast._h = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  const el = document.getElementById(id);
+  if (el) el.classList.add('active');
+}
+
+document.querySelectorAll('[data-back]').forEach(b=>{
+  b.addEventListener('click', ()=>showScreen(b.getAttribute('data-back')));
+});
+
+document.getElementById('go-signup').addEventListener('click', ()=>showScreen('screen-signup'));
+document.getElementById('go-login').addEventListener('click', ()=>showScreen('screen-login'));
+document.getElementById('gear-btn').addEventListener('click', ()=>showScreen('screen-settings'));
+document.getElementById('instructions-continue').addEventListener('click', ()=>showScreen('screen-menu'));
+document.getElementById('play-btn').addEventListener('click', ()=>showScreen('screen-game'));
+document.getElementById('nav-levels').addEventListener('click', ()=>showScreen('screen-levels'));
+document.getElementById('nav-jets').addEventListener('click', ()=>showScreen('screen-jets'));
+document.getElementById('nav-stats').addEventListener('click', ()=>showScreen('screen-stats'));
+document.getElementById('nav-instructions').addEventListener('click', ()=>showScreen('screen-instructions'));
+document.getElementById('clickstart-canvas').addEventListener('click', ()=>showScreen('screen-instructions'));
+document.getElementById('screen-clickstart').addEventListener('click', ()=>showScreen('screen-instructions'));
+
+function defaultProgress(){
+  return {
+    username: '',
+    coins: 0,
+    gems: 0,
+    equippedJetId: 0,
+    unlockedJets: [0],
+    levels: {},
+    stats: { totalWins: 0, totalLosses: 0 },
+    device: 'phone',
+    bossHpMode: 'percent',
+    adminOverrides: { stats: {}, skill: {} },
+    isAdmin: false,
+    updatedAt: Date.now()
+  };
+}
+
+let progress = defaultProgress();
+let session = { sb: null, local: null };
+
+function saveSessionLocal(sess){
+  try { localStorage.setItem('jw_sb_session', JSON.stringify(sess)); } catch (e) {}
+}
+function loadSessionLocal(){
+  try { const raw = localStorage.getItem('jw_sb_session'); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+}
+function clearSessionLocal(){
+  try { localStorage.removeItem('jw_sb_session'); } catch (e) {}
+}
+function cacheProgressLocal(key, data){
+  try { localStorage.setItem('jw_progress_cache:' + key, JSON.stringify(data)); } catch (e) {}
+}
+function loadCachedProgressLocal(key){
+  try { const raw = localStorage.getItem('jw_progress_cache:' + key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+}
+
+async function safeStorageGet(key){
+  try {
+    if (window.storage && typeof window.storage.get === 'function') {
+      const result = await window.storage.get(key, false);
+      return result ? JSON.parse(result.value) : null;
+    }
+  } catch (e) {}
+  return loadCachedProgressLocal(key);
+}
+
+async function safeStorageSet(key, value){
+  try {
+    if (window.storage && typeof window.storage.set === 'function') {
+      await window.storage.set(key, JSON.stringify(value), false);
+    }
+  } catch (e) {}
+  cacheProgressLocal(key, value);
+  return true;
+}
+
+async function sbFetch(path, opts){
+  opts = opts || {};
+  const headers = Object.assign({
+    'apikey': SUPABASE_ANON_KEY,
+    'Content-Type': 'application/json'
+  }, opts.headers || {});
+  if (opts.token) headers['Authorization'] = 'Bearer ' + opts.token;
+  const body = opts.body ? JSON.stringify(opts.body) : undefined;
+  const res = await fetch(SUPABASE_URL + path, {
+    method: opts.method || 'GET',
+    headers,
+    body
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  if (!res.ok) {
+    const msg = (data && (data.error_description || data.msg || data.message)) || ('Request failed (' + res.status + ')');
+    throw new Error(msg);
+  }
+  return data;
+}
+
+function usernameToEmail(u){
+  return String(u || '').trim().toLowerCase() + SB_EMAIL_DOMAIN;
+}
+
+async function sbSignUp(username, password){
+  return sbFetch('/auth/v1/signup', {
+    method: 'POST',
+    body: { email: usernameToEmail(username), password, data: { username } }
+  });
+}
+async function sbSignIn(username, password){
+  return sbFetch('/auth/v1/token?grant_type=password', {
+    method: 'POST',
+    body: { email: usernameToEmail(username), password }
+  });
+}
+async function sbRefresh(refreshToken){
+  return sbFetch('/auth/v1/token?grant_type=refresh_token', {
+    method: 'POST',
+    body: { refresh_token: refreshToken }
+  });
+}
+async function sbLoadProgress(userId, token){
+  const rows = await sbFetch('/rest/v1/progress?user_id=eq.' + userId + '&select=data', { token });
+  return rows && rows[0] ? rows[0].data : null;
+}
+async function sbSaveProgress(userId, username, token, data){
+  return sbFetch('/rest/v1/progress?on_conflict=user_id', {
+    method: 'POST',
+    token,
+    headers: { 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+    body: { user_id: userId, username, data, updated_at: new Date().toISOString() }
+  });
+}
+
+function setError(elId, msg){
+  const el = document.getElementById(elId);
+  if (el) el.textContent = msg || '';
+}
+
+async function persistProgress(){
+  if (!progress) return;
+  const username = String((progress.username || session.local || '')).trim();
+  if (!username) return;
+
+  const payload = JSON.parse(JSON.stringify(progress));
+  await safeStorageSet('jw_progress:' + username, payload);
+
+  if (session.sb && session.sb.user_id) {
+    try {
+      if (Math.floor(Date.now() / 1000) >= session.sb.expires_at - 30) {
+        const r = await sbRefresh(session.sb.refresh_token);
+        session.sb = {
+          access_token: r.access_token,
+          refresh_token: r.refresh_token,
+          expires_at: Math.floor(Date.now() / 1000) + (r.expires_in || 3600),
+          user_id: session.sb.user_id,
+          username: session.sb.username
+        };
+        saveSessionLocal(session.sb);
+      }
+      await sbSaveProgress(session.sb.user_id, session.sb.username, session.sb.access_token, payload);
+    } catch (e) {
+      console.warn('Supabase sync failed, keeping local cache:', e && e.message ? e.message : e);
+    }
+  }
+}
+
+async function hydrateProgressForUsername(username){
+  const base = defaultProgress();
+  const localData = await safeStorageGet('jw_progress:' + username);
+  if (localData) Object.assign(base, localData);
+  base.username = username;
+  progress = base;
+
+  if (session.sb && session.sb.username === username) {
+    try {
+      const remote = await sbLoadProgress(session.sb.user_id, session.sb.access_token);
+      if (remote) {
+        progress = Object.assign(base, remote);
+        progress.username = username;
+        await safeStorageSet('jw_progress:' + username, progress);
+      }
+    } catch (e) {
+      console.warn('Remote load failed; local cache remains:', e && e.message ? e.message : e);
+    }
+  }
+
+  updateHUD();
+}
+
+async function doLogin(){
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  setError('login-err', '');
+
+  if (!username || !password) {
+    setError('login-err', 'Enter username and password.');
+    return;
+  }
+
+  try {
+    if (!SB_CONFIGURED) {
+      session.local = { username };
+      await hydrateProgressForUsername(username);
+      showScreen('screen-menu');
+      toast('Local-only mode active; add Supabase keys for cross-device sync.');
+      return;
+    }
+
+    const res = await sbSignIn(username, password);
+    session.sb = {
+      access_token: res.access_token,
+      refresh_token: res.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + (res.expires_in || 3600),
+      user_id: res.user.id,
+      username
+    };
+    saveSessionLocal(session.sb);
+    await hydrateProgressForUsername(username);
+    showScreen('screen-menu');
+    toast('Signed in.');
+  } catch (e) {
+    setError('login-err', e && e.message ? e.message : 'Login failed.');
+  }
+}
+
+async function doSignup(){
+  const username = document.getElementById('signup-username').value.trim();
+  const password = document.getElementById('signup-password').value;
+  const password2 = document.getElementById('signup-password2').value;
+  setError('signup-err', '');
+
+  if (!username || !password || !password2) {
+    setError('signup-err', 'Please fill in all fields.');
+    return;
+  }
+  if (password !== password2) {
+    setError('signup-err', 'Passwords do not match.');
+    return;
+  }
+
+  try {
+    if (!SB_CONFIGURED) {
+      session.local = { username };
+      progress = defaultProgress();
+      progress.username = username;
+      await persistProgress();
+      showScreen('screen-menu');
+      toast('Local-only demo account created.');
+      return;
+    }
+
+    await sbSignUp(username, password);
+    const res = await sbSignIn(username, password);
+    session.sb = {
+      access_token: res.access_token,
+      refresh_token: res.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + (res.expires_in || 3600),
+      user_id: res.user.id,
+      username
+    };
+    saveSessionLocal(session.sb);
+    progress = defaultProgress();
+    progress.username = username;
+    await persistProgress();
+    showScreen('screen-menu');
+    toast('Account created.');
+  } catch (e) {
+    setError('signup-err', e && e.message ? e.message : 'Signup failed.');
+  }
+}
+
+async function doLogout(){
+  session.sb = null;
+  session.local = null;
+  clearSessionLocal();
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+  document.getElementById('settings-username').textContent = 'None';
+  showScreen('screen-login');
+  toast('Logged out.');
+}
+
+async function boot(){
+  const savedSession = loadSessionLocal();
+  if (savedSession && savedSession.user_id && savedSession.access_token) {
+    session.sb = savedSession;
+    try {
+      await hydrateProgressForUsername(savedSession.username || '');
+      showScreen('screen-menu');
+      return;
+    } catch (e) {
+      console.warn('Session restore failed:', e && e.message ? e.message : e);
+    }
+  }
+
+  const lastUsername = localStorage.getItem('jw_last_username');
+  if (lastUsername) {
+    session.local = { username: lastUsername };
+    await hydrateProgressForUsername(lastUsername);
+    showScreen('screen-menu');
+    return;
+  }
+
+  showScreen('screen-login');
+}
+
+function updateHUD(){
+  const userName = (progress && progress.username) || 'Pilot';
+  document.getElementById('menu-username').textContent = userName;
+  document.getElementById('settings-username').textContent = userName;
+  document.getElementById('menu-coins').textContent = String(progress.coins || 0);
+  document.getElementById('menu-gems').textContent = String(progress.gems || 0);
+  document.getElementById('jets-coins').textContent = String(progress.coins || 0);
+  document.getElementById('jets-gems').textContent = String(progress.gems || 0);
+  document.getElementById('menu-equipped').textContent = 'Falcon I';
+  if (progress && progress.username) {
+    try { localStorage.setItem('jw_last_username', progress.username); } catch (e) {}
+  }
+}
+
+document.getElementById('login-btn').addEventListener('click', doLogin);
+document.getElementById('signup-btn').addEventListener('click', doSignup);
+document.getElementById('settings-logout-btn').addEventListener('click', doLogout);
+
+document.getElementById('reset-btn').addEventListener('click', async ()=>{
+  const confirmName = document.getElementById('reset-confirm-input').value.trim();
+  const errBox = document.getElementById('reset-err');
+  if (!confirmName || (progress && progress.username && confirmName !== progress.username)) {
+    errBox.textContent = 'Type your username to confirm.';
+    return;
+  }
+  progress = defaultProgress();
+  progress.username = confirmName;
+  await persistProgress();
+  errBox.textContent = '';
+  document.getElementById('reset-confirm-input').value = '';
+  updateHUD();
+  toast('Progress reset.');
+});
+
+updateHUD();
+boot();
+})();
+</script>
+</body>
+</html>
