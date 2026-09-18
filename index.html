@@ -196,6 +196,15 @@
   .skill-lvl-row.locked .skill-lvl-num{ color:var(--muted);}
   .skill-lvl-desc{ flex:1;}
   .skill-lock-icon{ flex-shrink:0; color:var(--muted); image-rendering:pixelated; margin-top:2px;}
+
+  /* admin jet editor */
+  .admin-stat-row{ display:flex; align-items:center; gap:8px; padding:8px 4px; border-bottom:1px solid var(--border);}
+  .admin-stat-info{ flex:1; min-width:0; display:flex; flex-direction:column; gap:2px;}
+  .admin-stat-label{ font-family:var(--px-body); font-size:16px; color:var(--text);}
+  .admin-stat-orig{ font-family:var(--px-body); font-size:13px; color:var(--muted);}
+  .admin-stat-val{ font-family:var(--px-head); font-size:12px; color:var(--accent2); min-width:64px; text-align:right;}
+  .admin-stat-btns{ display:flex; gap:4px; flex-shrink:0;}
+  .admin-stat-btns button{ padding:6px 10px; font-size:12px;}
 </style>
 </head>
 <body>
@@ -354,6 +363,7 @@
         <h3 style="margin-top:18px;">Skill Upgrades Per Level</h3>
         <div id="jp-levelbreakdown"></div>
         <div id="jp-actions" style="display:flex; flex-direction:column; gap:10px; margin-top:14px;"></div>
+        <div id="jp-admin-panel" style="display:none;"></div>
       </div>
     </div>
   </div>
@@ -399,6 +409,11 @@
           <button class="secondary" id="bosshp-percent-btn" style="flex:1;">Percent</button>
           <button class="secondary" id="bosshp-number-btn" style="flex:1;">Number</button>
         </div>
+      </div>
+      <div class="settings-block" id="admin-revert-block" style="display:none;">
+        <h3>Admin: Jet &amp; Skill Overrides</h3>
+        <p>Reverts every jet's stats and skill tuning back to their original numbers. Individual jets can also be reverted one at a time from their own preview page.</p>
+        <button class="danger block" id="admin-revert-all-btn">Revert All Jets to Original</button>
       </div>
       <div class="settings-block">
         <h3>Reset Progress</h3>
@@ -465,21 +480,90 @@
 (function(){
 "use strict";
 
-/* ============================= STORAGE LAYER ============================= */
-const memFallback = {};
-async function stGet(key){
-  try{
-    const r = await window.storage.get(key, false);
-    return r ? JSON.parse(r.value) : null;
-  }catch(e){ return memFallback[key] !== undefined ? memFallback[key] : null; }
+/* ============================= SUPABASE CONFIG (cross-device save) ============================= */
+// TODO(setup): paste your project's values here (Supabase dashboard -> Settings -> API -> Project URL / anon public key).
+// This file stays 100% standalone on purpose - no SDK <script> tag, just fetch() calls straight
+// to Supabase's REST + Auth endpoints - so it keeps working if you save/copy this as a plain index.html.
+const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
+const SUPABASE_ANON_KEY = 'YOUR-ANON-PUBLIC-KEY';
+const SB_CONFIGURED = !SUPABASE_URL.includes('YOUR-PROJECT-REF') && !SUPABASE_ANON_KEY.includes('YOUR-ANON');
+const SB_EMAIL_DOMAIN = '@jetwarfare.local'; // usernames are mapped to fake emails since Supabase Auth requires one
+
+async function sbFetch(path, opts){
+  opts = opts || {};
+  const headers = Object.assign({ 'apikey': SUPABASE_ANON_KEY, 'Content-Type':'application/json' }, opts.headers||{});
+  if(opts.token) headers['Authorization'] = 'Bearer '+opts.token;
+  const res = await fetch(SUPABASE_URL+path, { method: opts.method||'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  let data = null;
+  try{ data = await res.json(); }catch(e){ /* some endpoints return no body */ }
+  if(!res.ok){
+    const msg = (data && (data.error_description || data.msg || data.message)) || ('Request failed ('+res.status+')');
+    throw new Error(msg);
+  }
+  return data;
 }
-async function stSet(key, value){
-  try{
-    await window.storage.set(key, JSON.stringify(value), false);
-    memFallback[key] = value;
-    return true;
-  }catch(e){ memFallback[key] = value; return false; }
+function usernameToEmail(u){ return u.toLowerCase()+SB_EMAIL_DOMAIN; }
+async function sbSignUp(username, password){ return sbFetch('/auth/v1/signup', {method:'POST', body:{email:usernameToEmail(username), password, data:{username}}}); }
+async function sbSignIn(username, password){ return sbFetch('/auth/v1/token?grant_type=password', {method:'POST', body:{email:usernameToEmail(username), password}}); }
+async function sbRefresh(refresh_token){ return sbFetch('/auth/v1/token?grant_type=refresh_token', {method:'POST', body:{refresh_token}}); }
+async function sbLoadProgress(user_id, token){
+  const rows = await sbFetch('/rest/v1/progress?user_id=eq.'+user_id+'&select=data', {token});
+  return (rows && rows[0]) ? rows[0].data : null;
 }
+async function sbSaveProgress(user_id, username, token, data){
+  return sbFetch('/rest/v1/progress?on_conflict=user_id', {
+    method:'POST', token,
+    headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
+    body:{user_id, username, data, updated_at:new Date().toISOString()}
+  });
+}
+
+/* ---- local-only helpers (localStorage): cached Supabase session token, an instant-load local
+   copy of progress, and the hardcoded local Admin account, which intentionally never touches
+   Supabase (see the TODO right below). ---- */
+const SB_SESSION_KEY = 'jw_sb_session';
+function saveSessionLocal(sess){ try{ localStorage.setItem(SB_SESSION_KEY, JSON.stringify(sess)); }catch(e){} }
+function loadSessionLocal(){ try{ const raw = localStorage.getItem(SB_SESSION_KEY); return raw?JSON.parse(raw):null; }catch(e){ return null; } }
+function clearSessionLocal(){ try{ localStorage.removeItem(SB_SESSION_KEY); }catch(e){} }
+function cacheProgressLocal(key, data){ try{ localStorage.setItem('jw_progress_cache:'+key, JSON.stringify(data)); }catch(e){} }
+function loadCachedProgressLocal(key){ try{ const raw = localStorage.getItem('jw_progress_cache:'+key); return raw?JSON.parse(raw):null; }catch(e){ return null; } }
+function saveAdminSessionLocal(v){ try{ if(v) localStorage.setItem('jw_admin_session','1'); else localStorage.removeItem('jw_admin_session'); }catch(e){} }
+function loadAdminSessionLocal(){ try{ return localStorage.getItem('jw_admin_session')==='1'; }catch(e){ return false; } }
+function saveAdminProgressLocal(p){ try{ localStorage.setItem('jw_admin_progress', JSON.stringify(p)); }catch(e){} }
+function loadAdminProgressLocal(){ try{ const raw = localStorage.getItem('jw_admin_progress'); return raw?JSON.parse(raw):null; }catch(e){ return null; } }
+
+// TODO(future): the Admin account's jet/skill overrides are saved locally only (see
+// loadAdminProgressLocal/saveAdminProgressLocal above and their call sites in login-btn,
+// doLogout, saveProgress, and boot()), so Admin state doesn't follow across devices. To sync it
+// too: sign Admin up once for real (sbSignUp('admin', ADMIN_PASSWORD)), then swap those four
+// call sites over to the normal sbLoadProgress/sbSaveProgress path used for regular accounts.
+
+// TODO(future): saves are last-write-wins - whichever device saves last overwrites the row. For
+// real conflict handling, compare the `updated_at` column (already written by sbSaveProgress)
+// against a locally-remembered timestamp before overwriting, and prompt the player to pick.
+
+let saveDebounceTimer = null;
+async function flushProgressToSupabase(){
+  if(!session.sb) return;
+  try{
+    let sess = session.sb;
+    if(Math.floor(Date.now()/1000) >= sess.expires_at-30){
+      const r = await sbRefresh(sess.refresh_token);
+      sess = {access_token:r.access_token, refresh_token:r.refresh_token, expires_at:Math.floor(Date.now()/1000)+(r.expires_in||3600), user_id:sess.user_id, username:sess.username};
+      session.sb = sess;
+      saveSessionLocal(sess);
+    }
+    await sbSaveProgress(sess.user_id, sess.username, sess.access_token, progress);
+  }catch(e){
+    // TODO(future): this fails silently and just relies on the local cache (see saveProgress)
+    // plus the next successful save to catch up. Consider a small "sync failed" UI indicator.
+    console.warn('Supabase progress sync failed, kept local cache instead:', e.message);
+  }
+}
+// Best-effort only: browsers don't guarantee fetch() finishes during beforeunload/pagehide.
+// TODO(future): for a guaranteed final save, replace this with navigator.sendBeacon() pointed at
+// a Supabase Edge Function (sendBeacon can't set the Authorization header a direct REST call needs).
+window.addEventListener('beforeunload', ()=>{ if(saveDebounceTimer){ clearTimeout(saveDebounceTimer); flushProgressToSupabase(); } });
 
 function toast(msg){
   const t = document.getElementById('toast');
@@ -501,7 +585,13 @@ document.getElementById('gear-btn').addEventListener('click', ()=>{
   document.getElementById('reset-err').textContent='';
   updateDeviceButtonsUI();
   updateBossHpButtonsUI();
+  document.getElementById('admin-revert-block').style.display = (progress && progress.isAdmin) ? 'block' : 'none';
   showScreen('screen-settings');
+});
+document.getElementById('admin-revert-all-btn').addEventListener('click', async ()=>{
+  progress.adminOverrides = {stats:{}, skill:{}};
+  await saveProgress();
+  toast('All jets and skills reverted to original.');
 });
 
 /* ============================= JET DATA ============================= */
@@ -572,19 +662,70 @@ function buildJets(){
 const JETS = buildJets();
 function jetById(id){ return JETS.find(j=>j.id===id); }
 function jetTier(jet){ return jet.id>=10 ? 3 : (jet.id>=5 ? 2 : 1); }
-// Higher-tier jets pack inherently stronger skills, on top of the skill-level upgrades.
-function jetTierBonus(jet){ return jet.id * 0.022; }
+
+/* ============================= ADMIN JET/SKILL OVERRIDES ============================= */
+// Only the admin account can ever populate progress.adminOverrides (the editor UI is gated on
+// progress.isAdmin), but the read-side helpers below are safe to call for any account - they
+// just fall through to each jet's original numbers when no override exists.
+function ensureAdminOverrides(){
+  if(!progress.adminOverrides) progress.adminOverrides = {stats:{}, skill:{}};
+  if(!progress.adminOverrides.stats) progress.adminOverrides.stats = {};
+  if(!progress.adminOverrides.skill) progress.adminOverrides.skill = {};
+  return progress.adminOverrides;
+}
+function getStatOverride(jetId){
+  return (progress && progress.adminOverrides && progress.adminOverrides.stats[jetId]) || {};
+}
+function getSkillOverride(jetId){
+  return (progress && progress.adminOverrides && progress.adminOverrides.skill[jetId]) || {powerAdjustPct:0, cooldownAdjust:0};
+}
+function getEffectiveJetStats(jet){
+  const ov = getStatOverride(jet.id);
+  return {
+    maxHealth: ov.maxHealth!=null ? ov.maxHealth : jet.stats.maxHealth,
+    fireRate: ov.fireRate!=null ? ov.fireRate : jet.stats.fireRate,
+    bulletSpeed: ov.bulletSpeed!=null ? ov.bulletSpeed : jet.stats.bulletSpeed,
+    bulletSize: ov.bulletSize!=null ? ov.bulletSize : jet.stats.bulletSize,
+    moveSpeed: ov.moveSpeed!=null ? ov.moveSpeed : jet.stats.moveSpeed,
+    damage: ov.damage!=null ? ov.damage : jet.stats.damage,
+    barrels: ov.barrels!=null ? ov.barrels : jet.barrels,
+    burst: ov.burst!=null ? ov.burst : jet.burst
+  };
+}
+// Builds a gameplay-ready jet object with admin overrides baked in (id/skill/color/etc. all
+// preserved via the spread, since overrides are keyed by id, not object identity).
+function getEffectiveJetObject(jet){
+  const eff = getEffectiveJetStats(jet);
+  return {
+    ...jet,
+    barrels: eff.barrels,
+    burst: eff.burst,
+    stats: { ...jet.stats, maxHealth:eff.maxHealth, fireRate:eff.fireRate, bulletSpeed:eff.bulletSpeed, bulletSize:eff.bulletSize, moveSpeed:eff.moveSpeed, damage:eff.damage }
+  };
+}
+// Higher-tier jets pack inherently stronger skills, on top of the skill-level upgrades - plus
+// whatever percentage-point bonus/penalty the admin has dialed in for this specific jet.
+function jetTierBonus(jet){
+  const base = jet.id * 0.022;
+  const adj = (getSkillOverride(jet.id).powerAdjustPct||0) / 100;
+  return base + adj;
+}
 
 function upgradeCost(level){ return Math.round(75 * Math.pow(1.8, level-1)); }
 
-// Uniform skill-cooldown ladder across every skill: Lv1=15s, Lv2=12s, Lv3=10s, Lv4=8s, Lv5=5s
+// Uniform skill-cooldown ladder across every skill: Lv1=15s, Lv2=12s, Lv3=10s, Lv4=8s, Lv5=5s.
+// jet is optional; when passed, the admin's per-jet cooldown adjustment (seconds) is applied on top.
 const SKILL_COOLDOWNS = [15, 12, 10, 8, 5];
-function skillCooldownForLevel(lvl){ return SKILL_COOLDOWNS[Math.max(0, Math.min(4, lvl-1))]; }
+function skillCooldownForLevel(lvl, jet){
+  const base = SKILL_COOLDOWNS[Math.max(0, Math.min(4, lvl-1))];
+  const adj = jet ? (getSkillOverride(jet.id).cooldownAdjust||0) : 0;
+  return Math.max(1, base + adj);
+}
 
 function skillPreviewText(jet, lvl){
   const id = jet.skill.id;
   const tb = jetTierBonus(jet);
-  const cd = skillCooldownForLevel(lvl);
+  const cd = skillCooldownForLevel(lvl, jet);
   switch(id){
     case 'overdrive': return `+${Math.round((50+lvl*10+tb*100))}% fire rate for ${(2.5+lvl*0.5).toFixed(1)}s, every ${cd}s.`;
     case 'twinshot': return `${Math.round((12+lvl*6+tb*100))}% chance per shot to fire a bonus bullet.`;
@@ -684,7 +825,8 @@ function defaultProgress(){
     seenInstructions:false,
     device:'phone',
     bossHpDisplay:'percent',
-    reviveConsumed:false
+    reviveConsumed:false,
+    adminOverrides:{stats:{}, skill:{}}
   };
 }
 
@@ -704,7 +846,8 @@ function buildAdminProgress(){
     device:'phone',
     bossHpDisplay:'percent',
     reviveConsumed:false,
-    isAdmin:true
+    isAdmin:true,
+    adminOverrides:{stats:{}, skill:{}}
   };
 }
 
@@ -717,55 +860,82 @@ document.getElementById('signup-btn').addEventListener('click', async ()=>{
   const p = document.getElementById('signup-password').value;
   const p2 = document.getElementById('signup-password2').value;
   const errEl = document.getElementById('signup-err');
+  errEl.textContent='';
   if(u.length < 3){ errEl.textContent='Username must be at least 3 characters.'; return; }
   if(!/^[a-zA-Z0-9_]+$/.test(u)){ errEl.textContent='Username: letters, numbers, underscore only.'; return; }
-  if(p.length < 4){ errEl.textContent='Password must be at least 4 characters.'; return; }
+  if(p.length < 6){ errEl.textContent='Password must be at least 6 characters.'; return; }
   if(p !== p2){ errEl.textContent='Passwords do not match.'; return; }
   const key = u.toLowerCase();
   if(key === ADMIN_KEY){ errEl.textContent='That username is reserved.'; return; }
-  const accounts = (await stGet('accounts')) || {};
-  if(accounts[key]){ errEl.textContent='That username is already taken.'; return; }
-  accounts[key] = { username:u, password:p };
-  await stSet('accounts', accounts);
-  progress = defaultProgress();
-  await stSet('progress:'+key, progress);
-  session.username = key;
-  session.displayName = u;
-  await stSet('session', {username:key, displayName:u});
-  toast('Account created!');
-  applyDevice();
-  showClickToBeginThenEnter();
+  if(!SB_CONFIGURED){ errEl.textContent='Supabase is not set up yet - fill in SUPABASE_URL / SUPABASE_ANON_KEY near the top of the script.'; return; }
+  const btn = document.getElementById('signup-btn');
+  btn.disabled = true;
+  try{
+    const su = await sbSignUp(u, p);
+    // If "Confirm email" is on in Supabase Auth settings, signup won't return a session directly -
+    // fall back to signing in right away (works once you disable it; see setup instructions).
+    const sessData = su.access_token ? su : await sbSignIn(u, p);
+    const sess = {access_token:sessData.access_token, refresh_token:sessData.refresh_token, expires_at:Math.floor(Date.now()/1000)+(sessData.expires_in||3600), user_id:sessData.user.id, username:u};
+    saveSessionLocal(sess);
+    session.username = key; session.displayName = u; session.sb = sess;
+    progress = defaultProgress();
+    cacheProgressLocal(key, progress);
+    await sbSaveProgress(sess.user_id, u, sess.access_token, progress);
+    toast('Account created!');
+    applyDevice();
+    showClickToBeginThenEnter();
+  }catch(e){
+    errEl.textContent = e.message || 'Sign up failed. That username may already be taken.';
+  }finally{
+    btn.disabled = false;
+  }
 });
 
 document.getElementById('login-btn').addEventListener('click', async ()=>{
   const u = document.getElementById('login-username').value.trim();
   const p = document.getElementById('login-password').value;
   const errEl = document.getElementById('login-err');
+  errEl.textContent='';
   if(!u || !p){ errEl.textContent='Enter your username and password.'; return; }
   const key = u.toLowerCase();
 
   if(key === ADMIN_KEY && p === ADMIN_PASSWORD){
     session.username = ADMIN_KEY;
     session.displayName = 'Admin';
-    await stSet('session', {username:ADMIN_KEY, displayName:'Admin'});
-    progress = buildAdminProgress();
-    await stSet('progress:'+ADMIN_KEY, progress);
+    session.sb = null;
+    saveAdminSessionLocal(true);
+    // Admin progress is local-only by design (see TODO near the top) - reused across re-logins
+    // on this device, but doesn't follow to other devices.
+    progress = loadAdminProgressLocal() || buildAdminProgress();
+    ensureAdminOverrides();
     applyDevice();
     showClickToBeginThenEnter();
     return;
   }
 
-  const accounts = (await stGet('accounts')) || {};
-  const acc = accounts[key];
-  if(!acc || acc.password !== p){ errEl.textContent='Incorrect username or password.'; return; }
-  session.username = key;
-  session.displayName = acc.username;
-  await stSet('session', {username:key, displayName:acc.username});
-  progress = (await stGet('progress:'+key)) || defaultProgress();
-  if(!progress.device) progress.device = 'phone';
-  if(!progress.bossHpDisplay) progress.bossHpDisplay = 'percent';
-  applyDevice();
-  showClickToBeginThenEnter();
+  if(!SB_CONFIGURED){ errEl.textContent='Supabase is not set up yet - fill in SUPABASE_URL / SUPABASE_ANON_KEY near the top of the script.'; return; }
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  try{
+    const si = await sbSignIn(u, p);
+    const uname = (si.user.user_metadata && si.user.user_metadata.username) || u;
+    const sess = {access_token:si.access_token, refresh_token:si.refresh_token, expires_at:Math.floor(Date.now()/1000)+(si.expires_in||3600), user_id:si.user.id, username:uname};
+    saveSessionLocal(sess);
+    session.username = key; session.displayName = uname; session.sb = sess;
+    let remote = null;
+    try{ remote = await sbLoadProgress(sess.user_id, sess.access_token); }catch(e){ /* offline - fall back to local cache below */ }
+    progress = remote || loadCachedProgressLocal(key) || defaultProgress();
+    if(!progress.device) progress.device = 'phone';
+    if(!progress.bossHpDisplay) progress.bossHpDisplay = 'percent';
+    ensureAdminOverrides();
+    cacheProgressLocal(key, progress);
+    applyDevice();
+    showClickToBeginThenEnter();
+  }catch(e){
+    errEl.textContent = 'Incorrect username or password.';
+  }finally{
+    btn.disabled = false;
+  }
 });
 
 async function doLogout(){
@@ -924,6 +1094,7 @@ document.getElementById('bosshp-number-btn').addEventListener('click', async ()=
       session.username = ADMIN_KEY;
       session.displayName = 'Admin';
       progress = (await stGet('progress:'+ADMIN_KEY)) || buildAdminProgress();
+      ensureAdminOverrides();
       applyDevice();
       showClickToBeginThenEnter();
       return;
@@ -935,6 +1106,7 @@ document.getElementById('bosshp-number-btn').addEventListener('click', async ()=
       progress = (await stGet('progress:'+s.username)) || defaultProgress();
       if(!progress.device) progress.device = 'phone';
       if(!progress.bossHpDisplay) progress.bossHpDisplay = 'percent';
+      ensureAdminOverrides();
       applyDevice();
       showClickToBeginThenEnter();
       return;
@@ -1151,6 +1323,7 @@ function renderJets(){
   JETS.forEach(jet=>{
     const owned = progress.ownedJets.includes(jet.id);
     const equipped = progress.equippedJet === jet.id;
+    const eff = getEffectiveJetStats(jet);
     const card = document.createElement('div');
     card.className='jet-card';
     const cvId = 'thumb-'+jet.id;
@@ -1158,7 +1331,7 @@ function renderJets(){
       <canvas class="jet-thumb-canvas" id="${cvId}" width="72" height="72"></canvas>
       <div class="jet-info">
         <h3 style="color:${jet.color}">${jet.name}${equipped?' <span style=\"color:var(--accent);font-size:9px;\">[EQUIPPED]</span>':''}</h3>
-        <div class="jet-stats">DMG ${jet.stats.damage} - HP ${jet.stats.maxHealth} - Barrels ${jet.barrels}</div>
+        <div class="jet-stats">DMG ${eff.damage} - HP ${eff.maxHealth} - Barrels ${eff.barrels}</div>
         <div class="skilltag">${jet.skill.name}</div>
       </div>
       <div class="jet-actions">
@@ -1206,13 +1379,14 @@ function renderJetPreview(){
   const c = cv.getContext('2d'); c.imageSmoothingEnabled=false;
   c.clearRect(0,0,110,110);
   drawPixelJet(c, 55, 55, 96, jet.color, false, undefined, undefined, jetSpriteFor(jet));
-  document.getElementById('jp-hp').textContent = jet.stats.maxHealth;
-  document.getElementById('jp-fr').textContent = jet.stats.fireRate+' ms';
-  document.getElementById('jp-bs').textContent = jet.stats.bulletSpeed+' px/s';
-  document.getElementById('jp-bsize').textContent = jet.stats.bulletSize+' px';
-  document.getElementById('jp-ms').textContent = jet.stats.moveSpeed;
-  document.getElementById('jp-dmg').textContent = jet.stats.damage;
-  document.getElementById('jp-barrels').textContent = jet.barrels+' / '+jet.burst;
+  const eff = getEffectiveJetStats(jet);
+  document.getElementById('jp-hp').textContent = eff.maxHealth;
+  document.getElementById('jp-fr').textContent = eff.fireRate+' ms';
+  document.getElementById('jp-bs').textContent = eff.bulletSpeed+' px/s';
+  document.getElementById('jp-bsize').textContent = eff.bulletSize+' px';
+  document.getElementById('jp-ms').textContent = eff.moveSpeed;
+  document.getElementById('jp-dmg').textContent = eff.damage;
+  document.getElementById('jp-barrels').textContent = eff.barrels+' / '+eff.burst;
   document.getElementById('jp-unlock').textContent = jet.unlockLevel;
   document.getElementById('jp-skillname').innerHTML = jet.skill.name + ' <span class="skill-type-tag">'+skillActivationLabel(jet.skill.id)+'</span>';
   document.getElementById('jp-skilldesc').textContent = jet.skill.desc;
@@ -1301,6 +1475,94 @@ function renderJetPreview(){
     }
     actions.appendChild(buyBtn);
   }
+  renderAdminJetEditor(jet);
+}
+
+/* ============================= ADMIN JET EDITOR (admin account only) ============================= */
+function adminStatRow(label, origText, curText, onMinus, onPlus){
+  const row = document.createElement('div');
+  row.className = 'admin-stat-row';
+  const info = document.createElement('div');
+  info.className = 'admin-stat-info';
+  info.innerHTML = `<span class="admin-stat-label">${label}</span><span class="admin-stat-orig">Original: ${origText}</span>`;
+  const val = document.createElement('span');
+  val.className = 'admin-stat-val';
+  val.textContent = curText;
+  const btns = document.createElement('div');
+  btns.className = 'admin-stat-btns';
+  const minusBtn = document.createElement('button'); minusBtn.className='secondary'; minusBtn.textContent='-';
+  const plusBtn = document.createElement('button'); plusBtn.className='secondary'; plusBtn.textContent='+';
+  minusBtn.addEventListener('click', onMinus);
+  plusBtn.addEventListener('click', onPlus);
+  btns.appendChild(minusBtn); btns.appendChild(plusBtn);
+  row.appendChild(info); row.appendChild(val); row.appendChild(btns);
+  return row;
+}
+function renderAdminJetEditor(jet){
+  const wrap = document.getElementById('jp-admin-panel');
+  if(!progress.isAdmin){ wrap.innerHTML=''; wrap.style.display='none'; return; }
+  wrap.style.display = 'block';
+  ensureAdminOverrides();
+  if(!progress.adminOverrides.stats[jet.id]) progress.adminOverrides.stats[jet.id] = {};
+  if(!progress.adminOverrides.skill[jet.id]) progress.adminOverrides.skill[jet.id] = {powerAdjustPct:0, cooldownAdjust:0};
+  const so = progress.adminOverrides.stats[jet.id];
+  const skOv = progress.adminOverrides.skill[jet.id];
+
+  wrap.innerHTML = '<h3 style="margin-top:18px;">Admin: Edit Jet</h3><p>Every value below can be tuned for this jet only. "Original" always shows the stock number for this jet.</p>';
+
+  const defs = [
+    {key:'maxHealth', label:'Health', orig:jet.stats.maxHealth, step:10, min:10, round:0},
+    {key:'fireRate', label:'Fire Rate (ms, lower = faster)', orig:jet.stats.fireRate, step:10, min:50, round:0},
+    {key:'bulletSpeed', label:'Bullet Speed', orig:jet.stats.bulletSpeed, step:20, min:50, round:0},
+    {key:'bulletSize', label:'Bullet Size', orig:jet.stats.bulletSize, step:1, min:2, round:0},
+    {key:'moveSpeed', label:'Drag Speed', orig:jet.stats.moveSpeed, step:0.2, min:1, round:2},
+    {key:'damage', label:'Damage', orig:jet.stats.damage, step:1, min:1, round:0},
+    {key:'barrels', label:'Barrels', orig:jet.barrels, step:1, min:1, max:5, round:0},
+    {key:'burst', label:'Burst', orig:jet.burst, step:1, min:1, max:5, round:0}
+  ];
+  defs.forEach(d=>{
+    const cur = so[d.key]!=null ? so[d.key] : d.orig;
+    wrap.appendChild(adminStatRow(d.label, d.orig, cur,
+      async ()=>{
+        let v = (so[d.key]!=null?so[d.key]:d.orig) - d.step;
+        if(d.min!=null) v = Math.max(d.min, v);
+        so[d.key] = +v.toFixed(d.round);
+        await saveProgress();
+        renderJetPreview();
+      },
+      async ()=>{
+        let v = (so[d.key]!=null?so[d.key]:d.orig) + d.step;
+        if(d.max!=null) v = Math.min(d.max, v);
+        so[d.key] = +v.toFixed(d.round);
+        await saveProgress();
+        renderJetPreview();
+      }
+    ));
+  });
+
+  const origPowerPct = +(jet.id*0.022*100).toFixed(1);
+  const curPowerPct = +(origPowerPct + (skOv.powerAdjustPct||0)).toFixed(1);
+  wrap.appendChild(adminStatRow('Skill Power Bonus', origPowerPct+'%', curPowerPct+'%',
+    async ()=>{ skOv.powerAdjustPct = (skOv.powerAdjustPct||0) - 5; await saveProgress(); renderJetPreview(); },
+    async ()=>{ skOv.powerAdjustPct = (skOv.powerAdjustPct||0) + 5; await saveProgress(); renderJetPreview(); }
+  ));
+  wrap.appendChild(adminStatRow('Skill Cooldown Adjust', '0s (15/12/10/8/5 ladder)', (skOv.cooldownAdjust||0)+'s',
+    async ()=>{ skOv.cooldownAdjust = Math.max(-10, (skOv.cooldownAdjust||0)-1); await saveProgress(); renderJetPreview(); },
+    async ()=>{ skOv.cooldownAdjust = Math.min(10, (skOv.cooldownAdjust||0)+1); await saveProgress(); renderJetPreview(); }
+  ));
+
+  const revertBtn = document.createElement('button');
+  revertBtn.className = 'danger block';
+  revertBtn.textContent = 'Revert This Jet to Original';
+  revertBtn.style.marginTop = '10px';
+  revertBtn.addEventListener('click', async ()=>{
+    delete progress.adminOverrides.stats[jet.id];
+    delete progress.adminOverrides.skill[jet.id];
+    await saveProgress();
+    toast(jet.name+' reverted to original.');
+    renderJetPreview();
+  });
+  wrap.appendChild(revertBtn);
 }
 
 /* ============================= SETTINGS / RESET ============================= */
@@ -1352,7 +1614,7 @@ let rafId = null;
 let lastT = 0;
 
 function startLevel(level){
-  const jet = jetById(progress.equippedJet);
+  const jet = getEffectiveJetObject(jetById(progress.equippedJet));
   const cfg = getLevelConfig(level);
   gameState = {
     level, cfg,
@@ -1382,7 +1644,7 @@ function startLevel(level){
   };
   const skillInfo = progress.jetLevels[jet.id] || {wins:0, level:1, winsSinceLevel:0, purchaseCosts:[]};
   gameState.player.skillLevel = skillInfo.level;
-  gameState.player.manualCdMax = skillCooldownForLevel(skillInfo.level);
+  gameState.player.manualCdMax = skillCooldownForLevel(skillInfo.level, jet);
   gameState.skillActivationType = SKILL_ACTIVATION_TYPE[jet.skill.id] || 'manual';
   skillBtn.style.display = gameState.skillActivationType==='manual' ? 'flex' : 'none';
   queueWave(0);
@@ -1830,7 +2092,7 @@ function tickSkill(dt, p, gs){
     case 'shield': {
       p.shieldMax = 1+Math.floor(lvl/2)+Math.floor(gs.jet.id/5);
       p.shieldRegenTimer += dt;
-      const regenTime = skillCooldownForLevel(lvl);
+      const regenTime = skillCooldownForLevel(lvl, gs.jet);
       if(p.shieldRegenTimer>=regenTime && p.shieldCharges<p.shieldMax){
         p.shieldRegenTimer=0; p.shieldCharges++;
       }
@@ -2119,11 +2381,11 @@ function stopSkillWatch(){
 }
 document.getElementById('sw-back-btn').addEventListener('click', ()=>{ stopSkillWatch(); showScreen('screen-jetpreview'); });
 document.getElementById('jp-watchskill').addEventListener('click', ()=>{
-  const jet = jetById(previewJetId);
+  const jet = getEffectiveJetObject(jetById(previewJetId));
   openSkillWatch(jet, 5, 'skill'); // preview always shows the skill maxed at Lv.5
 });
 document.getElementById('jp-watchfire').addEventListener('click', ()=>{
-  const jet = jetById(previewJetId);
+  const jet = getEffectiveJetObject(jetById(previewJetId));
   openSkillWatch(jet, 5, 'fire'); // preview always shows firing maxed at Lv.5
 });
 
@@ -2229,7 +2491,7 @@ function demoTickSkill(dt, d){
     case 'shield': {
       p.shieldMax=1+Math.floor(lvl/2)+Math.floor(jet.id/5);
       p.shieldRegenTimer+=dt;
-      const regenTime=skillCooldownForLevel(lvl);
+      const regenTime=skillCooldownForLevel(lvl, jet);
       if(p.shieldRegenTimer>=regenTime && p.shieldCharges<p.shieldMax){ p.shieldRegenTimer=0; p.shieldCharges++; demoLabel(d,'SHIELD UP!'); }
       break;
     }
