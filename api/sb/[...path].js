@@ -8,8 +8,15 @@ const SUPABASE_PROJECT_URL = 'https://fzhparobkjgysfbsamci.supabase.co';
 module.exports = async function handler(req, res) {
   try {
     const url = new URL(req.url, 'http://placeholder');
-    const upstreamPath = url.pathname.replace(/^\/api\/sb/, '');
-    const targetUrl = SUPABASE_PROJECT_URL + upstreamPath + url.search;
+    
+    // Strip leading /api/sb prefix
+    let cleanPath = url.pathname.replace(/^\/api\/sb\/?/, '');
+    if (!cleanPath.startsWith('/')) {
+      cleanPath = '/' + cleanPath;
+    }
+
+    // Safely combine URLs
+    const targetUrl = new URL(cleanPath + url.search, SUPABASE_PROJECT_URL).toString();
 
     const headers = {};
     ['apikey', 'authorization', 'content-type', 'prefer'].forEach((h) => {
@@ -27,8 +34,9 @@ module.exports = async function handler(req, res) {
     res.status(upstream.status);
     const contentType = upstream.headers.get('content-type');
     if (contentType) res.setHeader('content-type', contentType);
+    
     res.send(text);
   } catch (e) {
     res.status(502).json({ error: 'proxy_error', message: e.message });
   }
-}
+};
